@@ -744,6 +744,24 @@ class TimingApp:
                 self.log(f"Aremak okuyucu {slot + 1}/{MAX_IMAGES} hazır "
                          f"(ısınma {time.perf_counter() - started:.1f} sn).")
                 self.root.after(0, self._refresh_engine_state)
+            # Tam kare ısınması: motor gördüğü ilk görüntü BOYUTU için model
+            # hazırlığı yapıyor (kesitten sonra 20 MP tam kare yeniden ısınma
+            # istiyor; ilk tam kare koşusu 5 sn/kamera sürüyordu). Ölçüme
+            # girmesin diye 6 okuyucuya burada, paralel, bir kez tam kare okutulur.
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            started = time.perf_counter()
+            previous_cwd = os.getcwd()
+            if AREMAK_BIN.is_dir():
+                os.chdir(AREMAK_BIN)
+            try:
+                def warm(slot):
+                    cv2.imwrite(self._tmp_bmps[slot], gray)
+                    self.aremak_readers[slot].scan(self._tmp_bmps[slot])
+                with ThreadPoolExecutor(max_workers=MAX_IMAGES) as pool:
+                    list(pool.map(warm, range(len(self.aremak_readers))))
+            finally:
+                os.chdir(previous_cwd)
+            self.log(f"Aremak tam kare ısınması tamam ({time.perf_counter() - started:.1f} sn).")
         except Exception as exc:
             reason = str(exc).splitlines()[0][:160]
             self.log(f"BARKOD KULLANILAMIYOR: {reason}")
