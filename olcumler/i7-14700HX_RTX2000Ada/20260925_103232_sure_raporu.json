@@ -1,0 +1,94 @@
+{
+ "tarih": "20260925_103232",
+ "yolo_cihazi": "cpu",
+ "barkod_motoru": "Aremak",
+ "barkod_modu": "paralel",
+ "ocr_dahil": true,
+ "kayit_dahil": true,
+ "toplam_sn": 16.199,
+ "adimlar_sn": {
+  "okuma": 0.686,
+  "ham_kayit": 1.202,
+  "yolo": 0.468,
+  "barkod": 8.77,
+  "filtre": 0.1,
+  "kesit_kayit": 3.608,
+  "tekil": 0.004,
+  "ocr": 0.655
+ },
+ "ozet": {
+  "kasa": 246,
+  "ham": 282,
+  "cakisan": 36,
+  "tekil_barkod": 243,
+  "okunamayan": 3,
+  "ocr_hedef": 3,
+  "ocr_cozulen": 3,
+  "ocr_deneme": 3,
+  "barkod_modu": "paralel"
+ },
+ "goruntuler": [
+  {
+   "goruntu": "K1_DB0735708.jpg",
+   "kasa": 49,
+   "barkod": 49,
+   "okunamayan": 0,
+   "elenen": 2,
+   "barkod_sn": 7.534,
+   "sure_sn": 8.542
+  },
+  {
+   "goruntu": "K2_DB0735705.jpg",
+   "kasa": 54,
+   "barkod": 53,
+   "okunamayan": 1,
+   "elenen": 3,
+   "barkod_sn": 8.698,
+   "sure_sn": 9.825
+  },
+  {
+   "goruntu": "K3_DB0735707.jpg",
+   "kasa": 49,
+   "barkod": 49,
+   "okunamayan": 0,
+   "elenen": 1,
+   "barkod_sn": 8.77,
+   "sure_sn": 9.818
+  },
+  {
+   "goruntu": "K4_DB0735702.jpg",
+   "kasa": 58,
+   "barkod": 58,
+   "okunamayan": 0,
+   "elenen": 2,
+   "barkod_sn": 7.98,
+   "sure_sn": 9.035
+  },
+  {
+   "goruntu": "K5_DA0150358.jpg",
+   "kasa": 26,
+   "barkod": 25,
+   "okunamayan": 1,
+   "elenen": 19,
+   "barkod_sn": 6.556,
+   "sure_sn": 7.389
+  },
+  {
+   "goruntu": "K6_DA9793274.jpg",
+   "kasa": 46,
+   "barkod": 45,
+   "okunamayan": 1,
+   "elenen": 2,
+   "barkod_sn": 8.569,
+   "sure_sn": 9.562
+  }
+ ],
+ "dosyalar": [
+  "C:/Users/Administrator/i7-14/gorseller/K1_DB0735708.jpg",
+  "C:/Users/Administrator/i7-14/gorseller/K2_DB0735705.jpg",
+  "C:/Users/Administrator/i7-14/gorseller/K3_DB0735707.jpg",
+  "C:/Users/Administrator/i7-14/gorseller/K4_DB0735702.jpg",
+  "C:/Users/Administrator/i7-14/gorseller/K5_DA0150358.jpg",
+  "C:/Users/Administrator/i7-14/gorseller/K6_DA9793274.jpg"
+ ]
+}
