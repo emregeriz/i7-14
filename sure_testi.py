@@ -286,6 +286,10 @@ class TimingApp:
         self.parallel_var = tk.BooleanVar(value=False)
         self.fast_var = tk.BooleanVar(value=False)
         self.fullframe_var = tk.BooleanVar(value=False)
+        self.pool_var = tk.BooleanVar(value=False)
+        # Kesit havuzu ile tam kare birbirini dışlar (barkod yöntemi tek olmalı).
+        self.pool_var.trace_add("write", lambda *_: self.pool_var.get() and self.fullframe_var.set(False))
+        self.fullframe_var.trace_add("write", lambda *_: self.fullframe_var.get() and self.pool_var.set(False))
         self._build_ui()
         make_fullscreen(self.root)
         self.filter = _Filter(self.log)
@@ -417,6 +421,17 @@ class TimingApp:
             font=ctk.CTkFont(theme.FONT, 10, "bold"),
         )
         self.fullframe_check.pack(side="left", padx=(12, 0))
+        # Kesit havuzu: ~280 kesit tek ortak kuyruktan, 6 okuyucu bitirdikçe
+        # sıradakini alır (kamera kamera bekleme yok). Tam kare ile aynı anda
+        # seçilemez; "6 kamera aynı anda" gerektirir.
+        self.pool_check = ctk.CTkCheckBox(
+            parallel_row,
+            text="Kesit havuzu (ortak kuyruk)",
+            variable=self.pool_var,
+            text_color=theme.AMBER,
+            font=ctk.CTkFont(theme.FONT, 10, "bold"),
+        )
+        self.pool_check.pack(side="left", padx=(12, 0))
         self.ocr_check = ctk.CTkCheckBox(
             options,
             text="OCR dahil",
@@ -872,6 +887,11 @@ class TimingApp:
         with_barcode = None if engine == "Kapalı" else engine
         with_ocr = self.ocr_var.get()
         parallel = bool(with_barcode) and self.parallel_var.get()
+        pool = bool(with_barcode) and self.pool_var.get()
+        if pool and not parallel:
+            self.log("Kesit havuzu '6 kamera aynı anda' gerektirir; paralel mod açıldı.")
+            self.parallel_var.set(True)
+            parallel = True
         if parallel and engine == "Aremak" and len(self.aremak_readers) < len(self.paths):
             self.log(f"Aremak okuyucuları hazırlanıyor ({len(self.aremak_readers)}/"
                      f"{MAX_IMAGES}); birkaç saniye sonra tekrar deneyin.")
@@ -892,6 +912,7 @@ class TimingApp:
         self.parallel_check.configure(state="disabled")
         self.fast_check.configure(state="disabled")
         self.fullframe_check.configure(state="disabled")
+        self.pool_check.configure(state="disabled")
         for tile in self.tiles[: len(self.paths)]:
             tile.use_light_preview(self.fast_var.get())
             tile.info.configure(text="Sırada", text_color=theme.TEXT_MUTED)
@@ -901,7 +922,7 @@ class TimingApp:
         threading.Thread(
             target=self._worker,
             args=(list(self.paths), with_barcode, with_ocr, self.save_var.get(), parallel,
-                  self.fast_var.get(), self.fullframe_var.get()),
+                  self.fast_var.get(), self.fullframe_var.get(), pool),
             daemon=True,
         ).start()
 
@@ -914,12 +935,13 @@ class TimingApp:
         self.root.after(50, self._tick)
 
     def _worker(self, paths, with_barcode, with_ocr, save, parallel, fast=False,
-                fullframe=False):
+                fullframe=False, pool=False):
         """Üç aşama: (1) okuma+kayıt+YOLO sırayla, (2) barkod — sırayla ya da
         6 kamera aynı anda, (3) filtre+kayıt, ardından tekilleştirme ve OCR.
 
         fast: görüntüler paralel okunur, ham kare YOLO'yla eşzamanlı yazılır,
-        kesitler paralel yazılır, paralel barkod ortak kuyruktan okunur."""
+        kesitler paralel yazılır. pool: kesitler ortak kuyruktan okunur.
+        fullframe: tam kare + okunmayan kesit (paralelde kesitler havuzdan)."""
         times = {key: 0.0 for key, _ in STAGES}
         enabled = {"barkod": with_barcode, "tekil": with_barcode, "ocr": with_ocr}
         run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1012,7 +1034,7 @@ class TimingApp:
 
             # ---- 2) barkod: TTO gibi filtreden ÖNCE, YOLO'nun her kutusunda
             if with_barcode and items:
-                self._read_barcodes(items, with_barcode, parallel, fast, fullframe)
+                self._read_barcodes(items, with_barcode, parallel, fast, fullframe, pool)
 
                 # duvar saati: paralelde en uzun kamera, sıralıda toplam
                 times["barkod"] += (max(i["barcode_sec"] for i in items) if parallel
@@ -1119,6 +1141,7 @@ class TimingApp:
             )
             if with_barcode:
                 summary["barkod_modu"] = "paralel" if parallel else "sirali"
+                summary["kesit_havuzu"] = pool
             if with_barcode and fullframe:
                 summary["tam_kare"] = {
                     "tam_karede_okunan": sum(i.get("ff_matched", 0) for i in items),
@@ -1148,11 +1171,13 @@ class TimingApp:
                 self.parallel_check.configure(state="normal")
                 self.fast_check.configure(state="normal")
                 self.fullframe_check.configure(state="normal")
+                self.pool_check.configure(state="normal")
                 self._update_run_button()
 
             self.root.after(0, finish)
 
-    def _read_barcodes(self, items, engine, parallel, fast=False, fullframe=False):
+    def _read_barcodes(self, items, engine, parallel, fast=False, fullframe=False,
+                       pool=False):
         """Her kameranın kutularını okur; item["barcode_sec"] kamera süresidir.
 
         fast + parallel: kameraya bağlı kalmadan tüm kasalar tek kuyruktan,
@@ -1216,9 +1241,10 @@ class TimingApp:
         if pin_cwd:
             os.chdir(AREMAK_BIN)
         try:
-            if fast and fullframe:
+            # Paralelde tam kare: okunmayan kesitler her zaman ortak havuzdan.
+            if fullframe:
                 self._read_barcodes_fullframe_queue(items, engine)
-            elif fast and not fullframe:
+            elif pool:
                 self._read_barcodes_queue(items, engine)
             else:
                 with ThreadPoolExecutor(max_workers=len(items)) as pool:
@@ -1418,6 +1444,7 @@ class TimingApp:
             "barkod_modu": summary.get("barkod_modu"),
             "hizlandirilmis": fast,
             "tam_kare": summary.get("tam_kare") is not None,
+            "kesit_havuzu": summary.get("kesit_havuzu", False),
             "ocr_dahil": with_ocr,
             "kayit_dahil": save,
             "toplam_sn": round(total, 3),
