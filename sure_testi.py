@@ -285,6 +285,7 @@ class TimingApp:
         self.engine_var = tk.StringVar(value="Kapalı")
         self.parallel_var = tk.BooleanVar(value=False)
         self.fast_var = tk.BooleanVar(value=False)
+        self.fullframe_var = tk.BooleanVar(value=False)
         self._build_ui()
         make_fullscreen(self.root)
         self.filter = _Filter(self.log)
@@ -405,6 +406,17 @@ class TimingApp:
             font=ctk.CTkFont(theme.FONT, 10, "bold"),
         )
         self.fast_check.pack(side="left", padx=(12, 0))
+        # Tam kare: Aremak/HALCON'a 300 kesit yerine 6 tam kare verilir; kodlar
+        # konumuyla YOLO kutusuna eşlenir, eşleşmeyen kutular bugünkü gibi kesit
+        # kesit tekrar okunur. TTO'da yok; kapalıyken kod bugünkü gibi çalışır.
+        self.fullframe_check = ctk.CTkCheckBox(
+            parallel_row,
+            text="Tam kare + okunmayan kesit",
+            variable=self.fullframe_var,
+            text_color=theme.AMBER,
+            font=ctk.CTkFont(theme.FONT, 10, "bold"),
+        )
+        self.fullframe_check.pack(side="left", padx=(12, 0))
         self.ocr_check = ctk.CTkCheckBox(
             options,
             text="OCR dahil",
@@ -668,6 +680,16 @@ class TimingApp:
                     cv2.cvtColor(frame[:400, :2000], cv2.COLOR_BGR2GRAY))
                 ha.find_data_code_2d(ha.himage_from_numpy_array(gray), models[0], [], [])
             self.halcon_models = models
+            # Tam kare için ayrı model: 'maximum_recognition' + çok kod aramada
+            # gerçek bir 20 MP karede segfault görüldü (barkod_halcon/README 3.1);
+            # tam karede 'enhanced_recognition' kullanılır.
+            self.halcon_ff_models = []
+            for _ in range(MAX_IMAGES):
+                m = ha.create_data_code_2d_model(
+                    "Data Matrix ECC 200", "default_parameters", "enhanced_recognition")
+                ha.set_data_code_2d_param(m, ["symbol_shape", "polarity"], ["any", "any"])
+                ha.set_data_code_2d_param(m, "timeout", 5000)
+                self.halcon_ff_models.append(m)
             self.halcon_ready = True
             self.log("HALCON barkod hazır (Data Matrix, maximum_recognition).")
         except Exception as exc:
@@ -715,6 +737,53 @@ class TimingApp:
                 self.barcode_ready = False
         self._barcode_probe_running = False
         self.root.after(0, self._refresh_engine_state)
+
+    def _scan_frame(self, frame_bgr, engine, slot):
+        """Tam kareyi okur; [(kod, cx, cy), ...] döner (tam kare koordinatı)."""
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        if engine == "HALCON":
+            ha = self._ha
+            try:
+                xlds, _, codes = ha.find_data_code_2d(
+                    ha.himage_from_numpy_array(np.ascontiguousarray(gray)),
+                    self.halcon_ff_models[slot], ["stop_after_result_num"], [120])
+            except Exception:
+                return []
+            out = []
+            for i, code in enumerate(codes):
+                if not SERIAL_PATTERN.match(str(code)):
+                    continue
+                _, row, col = ha.area_center_xld(ha.select_obj(xlds, i + 1))
+                out.append((str(code), float(col[0]), float(row[0])))
+            return out
+        # Aremak: tam kare gri BMP (ön işleme yok; kesitteki CLAHE tam kareye
+        # uygulanmaz — önceki tam kare denemesi de düz gri ile 302/303 kod buldu)
+        if not cv2.imwrite(self._tmp_bmps[slot], gray):
+            return []
+        try:
+            return [(str(c.content), float(c.center_x), float(c.center_y))
+                    for c in self.aremak_readers[slot].scan(self._tmp_bmps[slot])]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _assign_codes(codes, crates):
+        """Kod merkezini içeren kutuya yazar; birden çok kutu içeriyorsa merkeze
+        en yakın olana. Kutuya düşmeyen kod sayısını döner."""
+        orphan = 0
+        for code, cx, cy in codes:
+            best, best_d = None, None
+            for kasa in crates:
+                x1, y1, x2, y2 = kasa["bbox"]
+                if x1 <= cx <= x2 and y1 <= cy <= y2:
+                    d = abs(cx - (x1 + x2) / 2) + abs(cy - (y1 + y2) / 2)
+                    if best is None or d < best_d:
+                        best, best_d = kasa, d
+            if best is None:
+                orphan += 1
+            elif code not in best["barkodlar"]:
+                best["barkodlar"].append(code)
+        return orphan
 
     def _scan_crate(self, crop_bgr, engine, slot):
         if engine == "HALCON":
@@ -822,6 +891,7 @@ class TimingApp:
         self.engine_switch.configure(state="disabled")
         self.parallel_check.configure(state="disabled")
         self.fast_check.configure(state="disabled")
+        self.fullframe_check.configure(state="disabled")
         for tile in self.tiles[: len(self.paths)]:
             tile.use_light_preview(self.fast_var.get())
             tile.info.configure(text="Sırada", text_color=theme.TEXT_MUTED)
@@ -831,7 +901,7 @@ class TimingApp:
         threading.Thread(
             target=self._worker,
             args=(list(self.paths), with_barcode, with_ocr, self.save_var.get(), parallel,
-                  self.fast_var.get()),
+                  self.fast_var.get(), self.fullframe_var.get()),
             daemon=True,
         ).start()
 
@@ -843,7 +913,8 @@ class TimingApp:
         )
         self.root.after(50, self._tick)
 
-    def _worker(self, paths, with_barcode, with_ocr, save, parallel, fast=False):
+    def _worker(self, paths, with_barcode, with_ocr, save, parallel, fast=False,
+                fullframe=False):
         """Üç aşama: (1) okuma+kayıt+YOLO sırayla, (2) barkod — sırayla ya da
         6 kamera aynı anda, (3) filtre+kayıt, ardından tekilleştirme ve OCR.
 
@@ -941,7 +1012,8 @@ class TimingApp:
 
             # ---- 2) barkod: TTO gibi filtreden ÖNCE, YOLO'nun her kutusunda
             if with_barcode and items:
-                self._read_barcodes(items, with_barcode, parallel, fast)
+                self._read_barcodes(items, with_barcode, parallel, fast, fullframe)
+
                 # duvar saati: paralelde en uzun kamera, sıralıda toplam
                 times["barkod"] += (max(i["barcode_sec"] for i in items) if parallel
                                     else sum(i["barcode_sec"] for i in items))
@@ -1047,6 +1119,12 @@ class TimingApp:
             )
             if with_barcode:
                 summary["barkod_modu"] = "paralel" if parallel else "sirali"
+            if with_barcode and fullframe:
+                summary["tam_kare"] = {
+                    "tam_karede_okunan": sum(i.get("ff_matched", 0) for i in items),
+                    "kesitte_ek_okunan": sum(i.get("ff_extra", 0) for i in items),
+                    "kutuya_dusmeyen_kod": sum(i.get("ff_orphan", 0) for i in items),
+                }
             total = time.perf_counter() - self._start
             self._show_times(times, total, enabled)
             self._write_report(run_dir, run_stamp, paths, times, total, per_image,
@@ -1069,11 +1147,12 @@ class TimingApp:
                 self.engine_switch.configure(state="normal")
                 self.parallel_check.configure(state="normal")
                 self.fast_check.configure(state="normal")
+                self.fullframe_check.configure(state="normal")
                 self._update_run_button()
 
             self.root.after(0, finish)
 
-    def _read_barcodes(self, items, engine, parallel, fast=False):
+    def _read_barcodes(self, items, engine, parallel, fast=False, fullframe=False):
         """Her kameranın kutularını okur; item["barcode_sec"] kamera süresidir.
 
         fast + parallel: kameraya bağlı kalmadan tüm kasalar tek kuyruktan,
@@ -1084,7 +1163,34 @@ class TimingApp:
         def read_camera(item, slot):
             started = time.perf_counter()
             frame = item["frame"]
-            for kasa in item["crates"]:
+            crates = item["crates"]
+            if fullframe:
+                # 1) tam kare → kodları kutulara eşle
+                for kasa in crates:
+                    kasa["barkodlar"] = []
+                found = self._scan_frame(frame, engine, slot)
+                item["ff_orphan"] = self._assign_codes(found, crates)
+                item["ff_matched"] = sum(1 for k in crates if k["barkodlar"])
+                item["ff_time"] = time.perf_counter() - started
+                # 2) eşleşmeyen kutular bugünkü gibi kesit kesit
+                extra = 0
+                for kasa in crates:
+                    if kasa["barkodlar"]:
+                        continue
+                    x1, y1, x2, y2 = kasa["bbox"]
+                    kasa["barkodlar"] = self._scan_crate(frame[y1:y2, x1:x2], engine, slot)
+                    extra += bool(kasa["barkodlar"])
+                item["ff_extra"] = extra
+                for kasa in crates:
+                    kasa["barkod_okundu"] = bool(kasa["barkodlar"])
+                item["barcode_sec"] = time.perf_counter() - started
+                self.log(f"K{item['index'] + 1}: tam kare {len(found)} kod → "
+                         f"{item['ff_matched']} kasa eşleşti ({item['ff_orphan']} kutu dışı), "
+                         f"{len(crates) - item['ff_matched']} kesit tekrar okundu, "
+                         f"+{extra} · tam kare {item['ff_time']:.2f} sn, toplam "
+                         f"{item['barcode_sec']:.2f} sn")
+                return
+            for kasa in crates:
                 x1, y1, x2, y2 = kasa["bbox"]
                 codes = self._scan_crate(frame[y1:y2, x1:x2], engine, slot)
                 kasa["barkodlar"] = codes
@@ -1110,7 +1216,7 @@ class TimingApp:
         if pin_cwd:
             os.chdir(AREMAK_BIN)
         try:
-            if fast:
+            if fast and not fullframe:
                 self._read_barcodes_queue(items, engine)
             else:
                 with ThreadPoolExecutor(max_workers=len(items)) as pool:
@@ -1251,6 +1357,7 @@ class TimingApp:
 
     def _write_report(self, run_dir, stamp, paths, times, total, per_image,
                       with_barcode, with_ocr, save, summary, fast=False):
+        summary = dict(summary)
         run_dir.mkdir(parents=True, exist_ok=True)
         report = {
             "tarih": stamp,
@@ -1258,6 +1365,7 @@ class TimingApp:
             "barkod_motoru": with_barcode or "kapalı",
             "barkod_modu": summary.get("barkod_modu"),
             "hizlandirilmis": fast,
+            "tam_kare": summary.get("tam_kare") is not None,
             "ocr_dahil": with_ocr,
             "kayit_dahil": save,
             "toplam_sn": round(total, 3),
