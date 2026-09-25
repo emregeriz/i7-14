@@ -753,7 +753,7 @@ class TimingApp:
             for i, code in enumerate(codes):
                 if not SERIAL_PATTERN.match(str(code)):
                     continue
-                _, row, col = ha.area_center_xld(ha.select_obj(xlds, i + 1))
+                _, row, col, _ = ha.area_center_xld(ha.select_obj(xlds, i + 1))
                 out.append((str(code), float(col[0]), float(row[0])))
             return out
         # Aremak: tam kare gri BMP (ön işleme yok; kesitteki CLAHE tam kareye
@@ -1216,7 +1216,9 @@ class TimingApp:
         if pin_cwd:
             os.chdir(AREMAK_BIN)
         try:
-            if fast and not fullframe:
+            if fast and fullframe:
+                self._read_barcodes_fullframe_queue(items, engine)
+            elif fast and not fullframe:
                 self._read_barcodes_queue(items, engine)
             else:
                 with ThreadPoolExecutor(max_workers=len(items)) as pool:
@@ -1224,6 +1226,56 @@ class TimingApp:
         finally:
             if pin_cwd:
                 os.chdir(previous_cwd)
+
+    def _read_barcodes_fullframe_queue(self, items, engine):
+        """Tam kare + kesit, ORTAK havuz: 6 okuyucu önce tam kareleri alır; tam
+        karesi biten okuyucu o kameranın eşleşmeyen kutularını havuza atar,
+        boşa çıkan her okuyucu havuzdan kesit çeker. Işığı kötü tek kamerada
+        biriken kesitler böylece 6 okuyucuya yayılır."""
+        lock = threading.Lock()
+        jobs = [("frame", item, None) for item in items]  # önce tam kareler
+        started = time.perf_counter()
+        for item in items:
+            for kasa in item["crates"]:
+                kasa["barkodlar"] = []
+            item["barcode_sec"] = 0.0
+            item["ff_extra"] = 0
+
+        def worker(slot):
+            while True:
+                with lock:
+                    if not jobs:
+                        return
+                    kind, item, kasa = jobs.pop(0)
+                if kind == "frame":
+                    found = self._scan_frame(item["frame"], engine, slot)
+                    with lock:
+                        item["ff_orphan"] = self._assign_codes(found, item["crates"])
+                        item["ff_matched"] = sum(1 for k in item["crates"] if k["barkodlar"])
+                        item["ff_time"] = time.perf_counter() - started
+                        item["ff_found"] = len(found)
+                        unread = [k for k in item["crates"] if not k["barkodlar"]]
+                        jobs.extend(("crop", item, k) for k in unread)
+                        item["barcode_sec"] = max(item["barcode_sec"], item["ff_time"])
+                else:
+                    x1, y1, x2, y2 = kasa["bbox"]
+                    codes = self._scan_crate(item["frame"][y1:y2, x1:x2], engine, slot)
+                    done = time.perf_counter() - started
+                    with lock:
+                        kasa["barkodlar"] = codes
+                        item["ff_extra"] += bool(codes)
+                        item["barcode_sec"] = max(item["barcode_sec"], done)
+
+        with ThreadPoolExecutor(max_workers=len(items)) as pool:
+            list(pool.map(worker, range(len(items))))
+        for item in items:
+            for kasa in item["crates"]:
+                kasa["barkod_okundu"] = bool(kasa["barkodlar"])
+            n = len(item["crates"])
+            self.log(f"K{item['index'] + 1}: tam kare {item.get('ff_found', 0)} kod → "
+                     f"{item.get('ff_matched', 0)} kasa eşleşti ({item.get('ff_orphan', 0)} kutu dışı), "
+                     f"{n - item.get('ff_matched', 0)} kesit havuzda okundu, +{item['ff_extra']} · "
+                     f"tam kare {item.get('ff_time', 0):.2f} sn, son kesit {item['barcode_sec']:.2f} sn")
 
     def _read_barcodes_queue(self, items, engine):
         jobs = []
