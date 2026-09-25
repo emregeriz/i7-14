@@ -145,6 +145,9 @@ class ImageTile(ctk.CTkFrame):
         self.index = index
         self._image_bgr = None
         self._photo = None
+        # Hızlandırılmış modda önizleme küçük tutulur: 20 MP görüntünün her
+        # <Configure>'da yeniden ölçeklenmesi ana iş parçacığında 1-4 sn yiyordu.
+        self.light_preview = False
 
         self.title = ctk.CTkLabel(
             self,
@@ -180,6 +183,7 @@ class ImageTile(ctk.CTkFrame):
         self.info.pack(fill="x", padx=10, pady=(0, 6))
 
     def set_file(self, path):
+        self._path = path
         self._image_bgr = cv2.imread(str(path))
         self.title.configure(text=f"Görüntü {self.index + 1} · {Path(path).name}")
         self.info.configure(text="Hazır", text_color=theme.TEXT_MUTED)
@@ -202,8 +206,24 @@ class ImageTile(ctk.CTkFrame):
         self.info.configure(text=text, text_color=theme.GREEN)
         self.configure(border_color=theme.BORDER_ACTIVE)
         if annotated is not None:
-            self._image_bgr = annotated
+            self._image_bgr = self._preview(annotated) if self.light_preview else annotated
         self._render()
+
+    @staticmethod
+    def _preview(image_bgr, max_side=960):
+        height, width = image_bgr.shape[:2]
+        scale = max_side / max(height, width)
+        if scale >= 1:
+            return image_bgr
+        return cv2.resize(image_bgr, (int(width * scale), int(height * scale)),
+                          interpolation=cv2.INTER_AREA)
+
+    def use_light_preview(self, enabled):
+        was_light, self.light_preview = self.light_preview, enabled
+        if enabled and self._image_bgr is not None:
+            self._image_bgr = self._preview(self._image_bgr)
+        elif was_light and getattr(self, "_path", None):
+            self._image_bgr = cv2.imread(str(self._path))  # normal mod: tam boyut
 
     def set_error(self, message):
         self.info.configure(text=message, text_color=theme.RED)
@@ -240,6 +260,8 @@ class TimingApp:
         self.ocr_ready = False
         # OCR KENDİ iş parçacığında yüklenir ve çalışır (TTO'daki gibi).
         self._ocr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
+        # "Hızlandırılmış" mod: görüntü okuma/kaydı için (cv2 GIL'i bırakır).
+        self._io_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="io")
         # Aremak okuyucu: nesnesi dongle olmadan da oluşur, hata ilk taramada
         # çıkar — bu yüzden hazır sayılması için deneme taraması şart.
         # Kamera başına bir okuyucu/model (slot 0 = sıralı çalıştırmada kullanılan).
@@ -262,6 +284,7 @@ class TimingApp:
         self.save_var = tk.BooleanVar(value=True)
         self.engine_var = tk.StringVar(value="Kapalı")
         self.parallel_var = tk.BooleanVar(value=False)
+        self.fast_var = tk.BooleanVar(value=False)
         self._build_ui()
         make_fullscreen(self.root)
         self.filter = _Filter(self.log)
@@ -363,14 +386,25 @@ class TimingApp:
             font=ctk.CTkFont(theme.FONT, 9, "bold"),
             command=self._start_barcode_probe,
         )
+        parallel_row = ctk.CTkFrame(options, fg_color="transparent")
+        parallel_row.pack(anchor="w", pady=2)
         self.parallel_check = ctk.CTkCheckBox(
-            options,
+            parallel_row,
             text="6 kamera aynı anda (paralel barkod)",
             variable=self.parallel_var,
             text_color=theme.TEXT_SOFT,
             font=ctk.CTkFont(theme.FONT, 10, "bold"),
         )
-        self.parallel_check.pack(anchor="w", pady=2)
+        self.parallel_check.pack(side="left")
+        # TTO'da OLMAYAN iyileştirmeler; kapalıyken ölçüm TTO ile birebir.
+        self.fast_check = ctk.CTkCheckBox(
+            parallel_row,
+            text="Hızlandırılmış (TTO'dan farklı)",
+            variable=self.fast_var,
+            text_color=theme.AMBER,
+            font=ctk.CTkFont(theme.FONT, 10, "bold"),
+        )
+        self.fast_check.pack(side="left", padx=(12, 0))
         self.ocr_check = ctk.CTkCheckBox(
             options,
             text="OCR dahil",
@@ -787,14 +821,17 @@ class TimingApp:
         self.select_btn.configure(state="disabled")
         self.engine_switch.configure(state="disabled")
         self.parallel_check.configure(state="disabled")
+        self.fast_check.configure(state="disabled")
         for tile in self.tiles[: len(self.paths)]:
+            tile.use_light_preview(self.fast_var.get())
             tile.info.configure(text="Sırada", text_color=theme.TEXT_MUTED)
         self.set_status("Çalışıyor", theme.AMBER)
         self._start = time.perf_counter()
         self._tick()
         threading.Thread(
             target=self._worker,
-            args=(list(self.paths), with_barcode, with_ocr, self.save_var.get(), parallel),
+            args=(list(self.paths), with_barcode, with_ocr, self.save_var.get(), parallel,
+                  self.fast_var.get()),
             daemon=True,
         ).start()
 
@@ -806,9 +843,12 @@ class TimingApp:
         )
         self.root.after(50, self._tick)
 
-    def _worker(self, paths, with_barcode, with_ocr, save, parallel):
+    def _worker(self, paths, with_barcode, with_ocr, save, parallel, fast=False):
         """Üç aşama: (1) okuma+kayıt+YOLO sırayla, (2) barkod — sırayla ya da
-        6 kamera aynı anda, (3) filtre+kayıt, ardından tekilleştirme ve OCR."""
+        6 kamera aynı anda, (3) filtre+kayıt, ardından tekilleştirme ve OCR.
+
+        fast: görüntüler paralel okunur, ham kare YOLO'yla eşzamanlı yazılır,
+        kesitler paralel yazılır, paralel barkod ortak kuyruktan okunur."""
         times = {key: 0.0 for key, _ in STAGES}
         enabled = {"barkod": with_barcode, "tekil": with_barcode, "ocr": with_ocr}
         run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -819,7 +859,14 @@ class TimingApp:
         items: list[dict] = []
         total_dropped = 0
         summary = {}
+        raw_writes = []
         try:
+            prefetched = None
+            if fast:
+                t = time.perf_counter()
+                prefetched = list(self._io_pool.map(cv2.imread, paths))
+                times["okuma"] += time.perf_counter() - t
+
             # ---- 1) okuma + ham kayıt + YOLO (sırayla)
             for index, path in enumerate(paths):
                 tile = self.tiles[index]
@@ -827,7 +874,7 @@ class TimingApp:
                 own = 0.0
 
                 t = time.perf_counter()
-                frame = cv2.imread(path)
+                frame = prefetched[index] if fast else cv2.imread(path)
                 elapsed = time.perf_counter() - t
                 times["okuma"] += elapsed
                 own += elapsed
@@ -841,7 +888,12 @@ class TimingApp:
                 if save:
                     t = time.perf_counter()
                     (save_dir / "crops").mkdir(parents=True, exist_ok=True)
-                    cv2.imwrite(str(save_dir / f"raw_{timestamp}.jpg"), frame)
+                    raw_path = str(save_dir / f"raw_{timestamp}.jpg")
+                    if fast:
+                        # YOLO'yla eşzamanlı yazılır; bekleme aşama sonunda ölçülür
+                        raw_writes.append(self._io_pool.submit(cv2.imwrite, raw_path, frame))
+                    else:
+                        cv2.imwrite(raw_path, frame)
                     elapsed = time.perf_counter() - t
                     times["ham_kayit"] += elapsed
                     own += elapsed
@@ -881,9 +933,15 @@ class TimingApp:
                     text_color=theme.AMBER))
                 self._show_times(times, time.perf_counter() - self._start, enabled)
 
+            if raw_writes:
+                t = time.perf_counter()
+                for future in raw_writes:
+                    future.result()
+                times["ham_kayit"] += time.perf_counter() - t
+
             # ---- 2) barkod: TTO gibi filtreden ÖNCE, YOLO'nun her kutusunda
             if with_barcode and items:
-                self._read_barcodes(items, with_barcode, parallel)
+                self._read_barcodes(items, with_barcode, parallel, fast)
                 # duvar saati: paralelde en uzun kamera, sıralıda toplam
                 times["barkod"] += (max(i["barcode_sec"] for i in items) if parallel
                                     else sum(i["barcode_sec"] for i in items))
@@ -930,19 +988,23 @@ class TimingApp:
                     # TTO: her kasa için crops/ + review/ kesiti ve işaretli görüntü
                     review_dir = save_dir / "review"
                     review_dir.mkdir(parents=True, exist_ok=True)
+                    writes = []
                     for kasa in kept:
                         x1, y1, x2, y2 = kasa["bbox"]
                         crop = frame[y1:y2, x1:x2]
                         prefix = "" if kasa["barkodlar"] or not with_barcode else "OKUNAMADI_"
-                        cv2.imwrite(
-                            str(save_dir / "crops"
-                                / f"{prefix}{timestamp}_kasa_{kasa['kasa_no']}.jpg"),
-                            crop,
-                        )
                         review_path = review_dir / f"{timestamp}_kasa_{kasa['kasa_no']}.jpg"
-                        cv2.imwrite(str(review_path), crop)
+                        writes.append((str(save_dir / "crops"
+                                           / f"{prefix}{timestamp}_kasa_{kasa['kasa_no']}.jpg"),
+                                       crop))
+                        writes.append((str(review_path), crop))
                         kasa["tto_crop_path"] = str(review_path)
-                    cv2.imwrite(str(save_dir / f"annotated_{timestamp}.jpg"), annotated)
+                    writes.append((str(save_dir / f"annotated_{timestamp}.jpg"), annotated))
+                    if fast:
+                        list(self._io_pool.map(lambda job: cv2.imwrite(*job), writes))
+                    else:
+                        for job in writes:
+                            cv2.imwrite(*job)
                     elapsed = time.perf_counter() - t
                     times["kesit_kayit"] += elapsed
                     own += elapsed
@@ -988,7 +1050,7 @@ class TimingApp:
             total = time.perf_counter() - self._start
             self._show_times(times, total, enabled)
             self._write_report(run_dir, run_stamp, paths, times, total, per_image,
-                               with_barcode, with_ocr, save, summary)
+                               with_barcode, with_ocr, save, summary, fast)
             self.set_status(f"Bitti · {total:.2f} sn", theme.GREEN)
             self.log(f"TOPLAM: {total:.2f} sn · {summary.get('kasa', 0)} kasa"
                      + ("" if with_barcode else " (tekilleştirme yok)"))
@@ -1006,12 +1068,18 @@ class TimingApp:
                 self.select_btn.configure(state="normal")
                 self.engine_switch.configure(state="normal")
                 self.parallel_check.configure(state="normal")
+                self.fast_check.configure(state="normal")
                 self._update_run_button()
 
             self.root.after(0, finish)
 
-    def _read_barcodes(self, items, engine, parallel):
-        """Her kameranın kutularını okur; item["barcode_sec"] kamera süresidir."""
+    def _read_barcodes(self, items, engine, parallel, fast=False):
+        """Her kameranın kutularını okur; item["barcode_sec"] kamera süresidir.
+
+        fast + parallel: kameraya bağlı kalmadan tüm kasalar tek kuyruktan,
+        büyükten küçüğe dağıtılır. Kasa sayısı az olan kamera erken bitip
+        boş beklemez; okuyucu sayısı (6) ve lisans kullanımı aynı kalır.
+        item["barcode_sec"] = o kameranın son kasasının bittiği an."""
 
         def read_camera(item, slot):
             started = time.perf_counter()
@@ -1042,11 +1110,42 @@ class TimingApp:
         if pin_cwd:
             os.chdir(AREMAK_BIN)
         try:
-            with ThreadPoolExecutor(max_workers=len(items)) as pool:
-                list(pool.map(read_camera, items, range(len(items))))
+            if fast:
+                self._read_barcodes_queue(items, engine)
+            else:
+                with ThreadPoolExecutor(max_workers=len(items)) as pool:
+                    list(pool.map(read_camera, items, range(len(items))))
         finally:
             if pin_cwd:
                 os.chdir(previous_cwd)
+
+    def _read_barcodes_queue(self, items, engine):
+        jobs = []
+        for item in items:
+            item["barcode_sec"] = 0.0
+            for kasa in item["crates"]:
+                x1, y1, x2, y2 = kasa["bbox"]
+                jobs.append(((x2 - x1) * (y2 - y1), item, kasa))
+        jobs.sort(key=lambda job: -job[0])
+        lock = threading.Lock()
+        started = time.perf_counter()
+
+        def worker(slot):
+            while True:
+                with lock:
+                    if not jobs:
+                        return
+                    _, item, kasa = jobs.pop(0)
+                x1, y1, x2, y2 = kasa["bbox"]
+                codes = self._scan_crate(item["frame"][y1:y2, x1:x2], engine, slot)
+                kasa["barkodlar"] = codes
+                kasa["barkod_okundu"] = bool(codes)
+                done = time.perf_counter() - started
+                with lock:
+                    item["barcode_sec"] = max(item["barcode_sec"], done)
+
+        with ThreadPoolExecutor(max_workers=len(items)) as pool:
+            list(pool.map(worker, range(len(items))))
 
     def _finish_count(self, results, frames, run_dir, times, with_barcode, with_ocr):
         """Tekilleştirme + OCR; özet sayıları döner ve metriklere yazar."""
@@ -1151,13 +1250,14 @@ class TimingApp:
         self.root.after(0, apply)
 
     def _write_report(self, run_dir, stamp, paths, times, total, per_image,
-                      with_barcode, with_ocr, save, summary):
+                      with_barcode, with_ocr, save, summary, fast=False):
         run_dir.mkdir(parents=True, exist_ok=True)
         report = {
             "tarih": stamp,
             "yolo_cihazi": "gpu" if self.device == 0 else "cpu",
             "barkod_motoru": with_barcode or "kapalı",
             "barkod_modu": summary.get("barkod_modu"),
+            "hizlandirilmis": fast,
             "ocr_dahil": with_ocr,
             "kayit_dahil": save,
             "toplam_sn": round(total, 3),

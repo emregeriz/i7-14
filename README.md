@@ -58,6 +58,33 @@ Karşılaştırılabilir ölçüm için her makinede aynı 4 koşuyu yapın:
 Ekran kartını ısıtmak için ilk koşuyu bir kez tekrarlayın; ilk çalıştırma
 her zaman biraz yavaştır.
 
+## Hızlandırılmış mod (`hizlandirilmis` branch'i)
+
+Üst çubukta **"Hızlandırılmış (TTO'dan farklı)"** kutusu. Kapalıyken uygulama
+TTO ile birebir çalışır (makineler arası karşılaştırma için bunu kullanın).
+Açıkken, TTO'da OLMAYAN şu iyileştirmeler devreye girer:
+
+- **Barkod (paralel mod):** kasalar kamera kamera değil tek ortak kuyruktan,
+  büyükten küçüğe okunur; kasası az kamera erken bitip boş beklemez.
+  Okuyucu sayısı yine 6 (dongle/lisans kullanımı aynı).
+- **Kayıt:** kesitler 8 iş parçacığıyla paralel yazılır; ham kare YOLO'yla
+  eşzamanlı arka planda yazılır.
+- **Okuma:** 6 görüntü diskten aynı anda okunur.
+- **Önizleme:** kartlar 20 MP görüntüyü her güncellemede yeniden
+  ölçeklemek yerine bir kez küçültür (ana iş parçacığında 1-4 sn yiyordu ve
+  ölçümü dalgalandırıyordu).
+
+Rapor JSON'unda `"hizlandirilmis": true/false` yazar. Sonuçlar (kasa/barkod
+sayıları) iki modda aynıdır.
+
+i7-14700HX + RTX 2000 Ada, Aremak paralel + OCR + kayıt, 4'er koşu:
+normal ort. **13,2 sn** (12,0–14,2) · hızlandırılmış ort. **9,6 sn** (9,2–10,0).
+
+Not: bu makinede paddlex'in getirdiği `opencv-contrib-python 4.10`,
+`opencv-python 4.13`'ün üzerine yazmıştı ve JPEG kaydı ~4,7× yavaştı.
+Kontrol: `py -3.11 -c "import cv2; print(cv2.__version__)"` → 4.10 çıkarsa
+`py -3.11 -m pip install --force-reinstall --no-deps opencv-python==4.13.0.92`.
+
 ## Referans ölçüm — HP ZBook Power G11 (Ultra 7 155H, 16 çekirdek)
 
 Aynı 6 görüntü, OCR + kayıt açık, 22-24.09.2026:
