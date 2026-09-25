@@ -1,0 +1,34 @@
+"""TTO masaüstü uygulamasının renk ve yazı tipi sistemi."""
+
+BG = "#F4F7F5"
+BG_RAISED = "#FFFFFF"
+SURFACE = "#FFFFFF"
+SURFACE_HOVER = "#F0F5F2"
+SURFACE_LIGHT = "#E8F2EC"
+BORDER = "#D7E4DC"
+BORDER_ACTIVE = "#8BC8A4"
+
+TEXT = "#14251B"
+TEXT_SOFT = "#3F5A49"
+TEXT_MUTED = "#6C8275"
+
+GREEN = "#2E9F60"
+GREEN_HOVER = "#268A53"
+GREEN_DARK = "#E1F3E8"
+CYAN = "#188C80"
+BLUE = "#3D7FCC"
+AMBER = "#C58A1C"
+RED = "#D64D4D"
+
+# Görüntü üstüne binen rozetler (kamera sayım payı vb.)
+OVERLAY_BG = "#12241A"
+OVERLAY_TEXT = "#FFFFFF"
+OVERLAY_MUTED = "#9FC7AE"
+OVERLAY_SOFT = "#C9E3D4"
+
+IMAGE_BG = "#E9EEEB"
+TERMINAL_BG = "#F7FAF8"
+TERMINAL_TEXT = "#314A3B"
+
+FONT = "Segoe UI"
+MONO = "Consolas"

@@ -1,0 +1,14 @@
+# Olcumun yapildigi makinedeki surumler (Python 3.11.9, 2026-09-25).
+# paddlepaddle-gpu ayri indexten kurulur -> kurulum.bat
+customtkinter==5.2.2
+ultralytics==8.3.203
+torch==2.11.0
+torchvision==0.26.0
+opencv-python==4.13.0.92
+numpy==2.3.5
+pillow==12.2.0
+paddleocr==3.5.0
+paddlex==3.5.1
+nvidia-cudnn-cu12==9.25.1.1
+pythonnet==3.0.5
+mvtec-halcon==26050.0.0
