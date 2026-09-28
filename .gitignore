@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 sonuclar/
+tto_hizli/captures/
+tto_hizli/hizli_ayarlar.json

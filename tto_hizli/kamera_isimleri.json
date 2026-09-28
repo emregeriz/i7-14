@@ -1,0 +1,27 @@
+{
+  "_aciklama": "Kamera sırası ve isimleri seri numarasına bağlıdır; sira küçükten büyüğe kartlara dizilir. İsim vermek için uygulamada kamera başlığına çift dokunun.",
+  "DB0735708": {
+    "sira": 2,
+    "isim": "Sol Alt"
+  },
+  "DB0735705": {
+    "sira": 1,
+    "isim": "Sağ Orta"
+  },
+  "DB0735707": {
+    "sira": 3,
+    "isim": "Sağ Alt"
+  },
+  "DB0735702": {
+    "sira": 4,
+    "isim": "Sol Orta"
+  },
+  "DA0150358": {
+    "sira": 5,
+    "isim": "Sağ Üst"
+  },
+  "DA9793274": {
+    "sira": 6,
+    "isim": "Sol Üst"
+  }
+}

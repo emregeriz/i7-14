@@ -85,6 +85,45 @@ Not: bu makinede paddlex'in getirdiği `opencv-contrib-python 4.10`,
 Kontrol: `py -3.11 -c "import cv2; print(cv2.__version__)"` → 4.10 çıkarsa
 `py -3.11 -m pip install --force-reinstall --no-deps opencv-python==4.13.0.92`.
 
+## TTO Hızlandırılmış — canlı 6 kamera (`tto_hizli/`)
+
+TTO'nun kopyası; gerçek Hikrobot kameralarla sayım yapar. Asıl TTO'dan tek
+farkı sayım ekranındaki turuncu **HIZLANDIRMA (test)** çubuğu. Hepsi
+kapalıyken sayım bugünkü TTO ile birebir aynı yoldan yapılır.
+
+**Ek gereksinim:** Hikrobot **MVS** kurulu olmalı (kamera SDK'sı; kurulum
+`MVCAM_COMMON_RUNENV` ortam değişkenini tanımlar). Kameralar bu bilgisayarın
+ağ kartına bağlı olmalı. Paketler `kurulum.bat` ile gelir.
+
+**Açma:** `tto_hizliaslat.bat` → 64 Kasa → **Kameraları Tara**. Barkod
+motoru hazır olunca 6 Aremak okuyucusu arka planda kurulup ısıtılır
+(~15-20 sn, sayıma dahil değil).
+
+**Kutular:**
+
+| Kutu | Ne yapar |
+|---|---|
+| 6 kamera aynı anda | Barkodu her kameraya ayrı okuyucuyla paralel okur |
+| Kesit havuzu | ~280 kesit tek kuyruktan 6 okuyucuya (tam kare ile birlikte seçilemez) |
+| Tam kare | Aremak'a 6 tam kare okutur, okunmayan kutular kesit kesit |
+| Hızlı kayıt | Ham kare / kesit / işaretli görüntü kayıtları paralel |
+| Çekerken oku (akış) | Bir kameranın fotoğrafı gelir gelmez barkodu başlar, diğerleri çekilirken |
+
+Seçimler `tto_hizli/hizli_ayarlar.json`'da saklanır.
+
+**Süre:** çubuğun sağında **TOPLAM** (OCR bitince "OCR dahil"),
+**⏱ Süre Detayı** düğmesi aşama aşama ve kamera kamera tabloyu açar
+(sıra bekleme, çekim, ham kayıt, YOLO, barkod, kayıt, bitiş). Her sayım
+`tto_hizli/captures/sure_kayitlari.jsonl` dosyasına yazılır.
+
+**Denenip geri alınan:** 6 kamerayı aynı anda tetikleyip 1 Gbit hattı eşit
+paylaştırmak (18 MB/sn × 6) — her karede binlerce paket kaybı çıktı, süre
+uzadı; kaldırıldı. Çekim bugünkü gibi aynı anda en fazla 2 kamera, kamera
+başına 33 MB/sn.
+
+**Kamera sırası:** `tto_hizli/kamera_isimleri.json` seri no → kart sırası
+(sahadaki 6 kamera). Farklı kameralar bağlanırsa yeni seriler sona eklenir.
+
 ## Referans ölçüm — HP ZBook Power G11 (Ultra 7 155H, 16 çekirdek)
 
 Aynı 6 görüntü, OCR + kayıt açık, 22-24.09.2026:
@@ -114,6 +153,8 @@ derlemesi); TTO'da da öyle.
 | `models/V8LAST.pt` | TTO'nun kullandığı YOLO modeli |
 | `gorseller/` | Test paleti, 6 kamera |
 | `theme.py`, `widgets.py` | Arayüz |
+| `tto_hizli/` | TTO Hızlandırılmış (canlı kamera); `hizli_islemci.py` hızlandırma yolları |
+| `Kamera_gui/` | TTO'nun kamera/YOLO/Aremak işlemci kodu (tto_hizli için, birebir kopya) |
 
 ## Bilinen noktalar
 

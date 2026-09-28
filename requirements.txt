@@ -11,4 +11,5 @@ paddleocr==3.5.0
 paddlex==3.5.1
 nvidia-cudnn-cu12==9.25.1.1
 pythonnet==3.0.5
+zxing-cpp==2.3.0
 mvtec-halcon==26050.0.0

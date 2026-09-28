@@ -1,0 +1,6 @@
+customtkinter
+Pillow
+numpy
+opencv-python
+ultralytics
+zxing-cpp
